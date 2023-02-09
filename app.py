@@ -1,11 +1,11 @@
+import os
+import json
 import re
 
-from PyQt6.QtCore import QSize, Qt, QMargins
-from PyQt6.QtGui import QAction
+# from PyQt6.QtGui import QAction
 import PyQt6.QtWidgets as qt
+from PyQt6.QtCore import QSize, Qt, QMargins
 from bs4 import BeautifulSoup
-
-import requests
 
 APP_VERSION = "0.1.1"
 URL_RE = re.compile(r"(ftp|http|https):\/\/(\w+:{0,1}\w*@)?(\S+)(:[0-9]+)?(\/|\/([\w#!:.?+=&%@!\-\/]))?")
@@ -31,7 +31,7 @@ class ScrollDisplay(qt.QScrollArea):
     # constructor
     def __init__(self):
         super().__init__()
-        self.is_output_raw = 0
+        self.output_option = 0
 
         # making widget resizable
         self.setWidgetResizable(True)
@@ -47,13 +47,13 @@ class ScrollDisplay(qt.QScrollArea):
         self.setWidget(self.label)
 
     def set_text(self, text: str):
-        if self.is_output_raw == 0:
+        if self.output_option == 0:
             self.label.setText(text)
-        elif self.is_output_raw == 1:
+        elif self.output_option == 1:
             self.label.setPlainText(text)
-        elif self.is_output_raw == 2:
+        elif self.output_option == 2:
             plain_soup = BeautifulSoup(text, 'lxml')
-            self.label.setPlainText(re.sub('\n+', '\n', plain_soup.text))
+            self.label.setPlainText(re.sub('[\n| ]+', '\n', plain_soup.text))
 
 
 class FormRadioButtons:
@@ -157,7 +157,7 @@ class EntityBox(qt.QWidget):
         self.rdo_with_css.clicked.connect(self.with_css)
         self.rdo_with_text.clicked.connect(self.with_text)
 
-    def requests_get(self, _):
+    def requests_get(self, _=None):
         '''
             Given URL in self.input_url.text(), blocking fetch and display content.
         '''
@@ -188,7 +188,7 @@ class EntityBox(qt.QWidget):
             else:
                 self.parent.set_status_bar(repr(resp))
 
-    def requests_extract(self, _):
+    def requests_extract(self, _=None):
         '''
             Extract data only after self.requests_get() is called.
             Responsive to display options.
@@ -223,40 +223,56 @@ class EntityBox(qt.QWidget):
 
         self.display.set_text(self.str_html)
 
-    def output_raw(self, _):
-        self.display.is_output_raw = 0
+    def output_raw(self, _=None):
+        self.display.output_option = 0
         if self.status_code != 200:
             return
 
         self.display.set_text(self.str_html)
 
-    def output_plain(self, _):
-        self.display.is_output_raw = 1
+    def output_plain(self, _=None):
+        self.display.output_option = 1
         if self.status_code != 200:
             return
 
         self.display.set_text(self.str_html)
 
-    def output_clean(self, _):
-        self.display.is_output_raw = 2
+    def output_clean(self, _=None):
+        self.display.output_option = 2
         if self.status_code != 200:
             return
 
         self.display.set_text(self.str_html)
 
-    def with_css(self, _):
+    def with_css(self, _=None):
         self.is_with_css = True
         if self.status_code != 200:
             return
 
         self.display.set_text(self.str_html)
 
-    def with_text(self, _):
+    def with_text(self, _=None):
         self.is_with_css = False
         if self.status_code != 200:
             return
 
         self.display.set_text(self.str_html)
+
+    def to_config(self) -> dict:
+        cfg = dict(
+            url=self.input_url.text(),
+            filter=self.input_filter.text(),
+            is_with_css=self.is_with_css,
+            output_option=self.display.output_option,
+        )
+        return cfg
+
+    def from_config(self, cfg: dict):
+        self.input_url.setText(cfg['url'])
+        self.input_filter.setText(cfg['filter'])
+        self.is_with_css = cfg['is_with_css']
+        self.display.output_option = cfg['output_option']
+        self.requests_get()
 
 
 def q_btn_set_width(button: qt.QPushButton, width: int):
@@ -278,7 +294,7 @@ class MainWindow(qt.QMainWindow):
         self.setStatusBar(self.statusBar)
         self.set_status_bar("Normal")
 
-        self.lst_display: list[EntityBox] = list()
+        self.list_entity_box: list[EntityBox] = list()
 
         # self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         # self.customContextMenuRequested.connect(lambda: print("calling context menu"))
@@ -287,17 +303,37 @@ class MainWindow(qt.QMainWindow):
         self.btn_add_display = qt.QPushButton("Add Display")
         self.btn_rmv_display = qt.QPushButton("Remove Display")
         self.btn_fetch_all = qt.QPushButton("Fetch All")
-        q_btn_set_width(self.btn_add_display, 160)
-        q_btn_set_width(self.btn_rmv_display, 160)
-        q_btn_set_width(self.btn_fetch_all, 160)
+        self.btn_save_config = qt.QPushButton("Save Config")
+        self.btn_load_config = qt.QPushButton("Load Config")
+        q_btn_set_width(self.btn_add_display, 140)
+        q_btn_set_width(self.btn_rmv_display, 140)
+        q_btn_set_width(self.btn_fetch_all, 140)
+        q_btn_set_width(self.btn_save_config, 140)
+        q_btn_set_width(self.btn_load_config, 140)
 
-        # 1/
+        # 1/ Layouts
         widget_main = qt.QWidget()
         layout_main = qt.QVBoxLayout()
         self.layout_main_fixed_btn = qt.QHBoxLayout()
-        self.layout_main_fixed_btn.addWidget(self.btn_add_display, alignment=Qt.AlignmentFlag.AlignLeft)
-        self.layout_main_fixed_btn.addWidget(self.btn_rmv_display, alignment=Qt.AlignmentFlag.AlignLeft)
-        self.layout_main_fixed_btn.addWidget(self.btn_fetch_all, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.layout_main_fixed_btn_left = qt.QHBoxLayout()
+        self.layout_main_fixed_btn_right = qt.QHBoxLayout()
+
+        self.layout_main_fixed_btn_left.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.layout_main_fixed_btn_right.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+        # Layout | Spacer | Layout such that btn_left is left aligned, btn_right is right aligned
+        self.layout_main_fixed_btn.addLayout(self.layout_main_fixed_btn_left)
+        self.layout_main_fixed_btn.addItem(qt.QSpacerItem(0, 0, qt.QSizePolicy.Policy.Expanding, qt.QSizePolicy.Policy.Minimum))
+        self.layout_main_fixed_btn.addLayout(self.layout_main_fixed_btn_right)
+
+        # 2/ Left Button
+        self.layout_main_fixed_btn_left.addWidget(self.btn_add_display, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.layout_main_fixed_btn_left.addWidget(self.btn_rmv_display, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.layout_main_fixed_btn_left.addWidget(self.btn_fetch_all,   alignment=Qt.AlignmentFlag.AlignLeft)
+
+        # 3/ Right Buttons
+        self.layout_main_fixed_btn_right.addWidget(self.btn_save_config, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.layout_main_fixed_btn_right.addWidget(self.btn_load_config, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.layout_main_display = qt.QScrollArea()
         self.layout_main_display_widget = qt.QWidget()
@@ -322,44 +358,86 @@ class MainWindow(qt.QMainWindow):
         self.btn_add_display.clicked.connect(self.add_display)
         self.btn_rmv_display.clicked.connect(self.rmv_display)
         self.btn_fetch_all.clicked.connect(self.fetch_all)
+        self.btn_save_config.clicked.connect(self.save_config)
+        self.btn_load_config.clicked.connect(self.load_config)
 
         self.setCentralWidget(widget_main)
 
-    def add_display(self):
+    def add_display(self) -> EntityBox:
         '''
         Add an EntityBox.
         '''
         eb = EntityBox(self)
-        self.lst_display.append(eb)
+        self.list_entity_box.append(eb)
         self.layout_main_display_widget_layout.addWidget(eb)
         self.set_status_bar('Added new widget')
+        return eb
 
     def rmv_display(self):
         '''
         Remove the bottom most EntityBox.
         '''
-        if len(self.lst_display):
-            eb: EntityBox = self.lst_display.pop()
+        if len(self.list_entity_box):
+            eb: EntityBox = self.list_entity_box.pop()
             self.layout_main_display_widget_layout.removeWidget(eb)
             self.set_status_bar('Removed bottom most widget')
 
         else:
             self.set_status_bar('Cannot remove widget')
 
+    def rmv_all_display(self):
+        '''
+        Remove all EntityBox.
+        '''
+        num_of_eb = len(self.list_entity_box)
+        for i in range(num_of_eb):
+            self.rmv_display()
+        self.set_status_bar('Removed all widgets')
+
     def fetch_all(self):
         '''
         For all existing EntityBox, fetch and display content.
         '''
-        for eb in self.lst_display:
+        for eb in self.list_entity_box:
             eb.requests_get(None)
 
     def save_config(self):
-        # TODO
-        raise NotImplementedError
+        '''
+        For all existing EntityBox, fetch and save their config.
+        '''
+        global_cfg = {}
+        for idx, eb in enumerate(self.list_entity_box):
+            global_cfg[idx] = eb.to_config()
+
+        with open("./config.json", 'w+') as f:
+            json.dump(global_cfg, f)
+
+        self.set_status_bar(f"Config saved to {os.getcwd()}/config.json")
 
     def load_config(self):
-        # TODO
-        raise NotImplementedError
+        '''
+        Clear all existing EB, load entirely new list of EntityBox from config.
+        '''
+        # TODO: Add a dialog to select arbitrary config
+        # TODO: Can add a preload config option
+        try:
+            with open("./config.json", 'r') as f:
+                cfg = json.load(f)
+
+                # verify key-value pair validity
+                for key in cfg:
+                    cfg_ = cfg[key]
+
+                    try:
+                        assert(all([required_key in cfg_.keys() for required_key in ['url', 'filter', 'is_with_css', 'output_option']]))
+                        self.add_display().from_config(cfg_)
+                    except AssertionError:
+                        self.set_status_bar("config.json may be corrupted. Try recreating proper file with Save Config.")
+
+        except FileNotFoundError:
+            self.set_status_bar("config.json not found in current working directory. Check if file exists.")
+
+        self.set_status_bar("Load config succeeded.")
 
     def set_status_bar(self, e):
         self.statusBar.showMessage(e)
