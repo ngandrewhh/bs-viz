@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 
 import requests
 
+APP_VERSION = "0.1.1"
 URL_RE = re.compile(r"(ftp|http|https):\/\/(\w+:{0,1}\w*@)?(\S+)(:[0-9]+)?(\/|\/([\w#!:.?+=&%@!\-\/]))?")
 CONTENT_MARGINS_NARROW = QMargins(2, 0, 2, 0)
 CONTENT_MARGINS_NORMAL = QMargins(2, 2, 2, 2)
@@ -24,6 +25,9 @@ Ut facilisis facilisis purus non tincidunt. Cras vel sem placerat, congue mauris
 
 
 class ScrollDisplay(qt.QScrollArea):
+    '''
+        Scrollable Website Content Display.
+    '''
     # constructor
     def __init__(self):
         super().__init__()
@@ -42,7 +46,7 @@ class ScrollDisplay(qt.QScrollArea):
 
         self.setWidget(self.label)
 
-    def set_text(self, text):
+    def set_text(self, text: str):
         if self.is_output_raw == 0:
             self.label.setText(text)
         elif self.is_output_raw == 1:
@@ -53,7 +57,12 @@ class ScrollDisplay(qt.QScrollArea):
 
 
 class FormRadioButtons:
-    def new(*button_names):
+    '''
+        Form Radio Button Line Factory Class.
+        Use new() method and pass in a list of button names.
+        Return the groupbox and a list of created buttons.
+    '''
+    def new(*button_names: str) -> (qt.QGroupBox, list[qt.QRadioButton]):
         rdo_gbox = qt.QGroupBox()
         rdo_hbox = qt.QHBoxLayout()
 
@@ -73,6 +82,9 @@ class FormRadioButtons:
 
 
 class EntityBox(qt.QWidget):
+    '''
+    EntityBox is a self-containing widget for scraping one URL.
+    '''
     TAG_EXCLUDE = ['script', 'meta', 'head', 'noscript', 'svg', 'html', 'body', 'div', 'aside', 'main']
 
     def __init__(self, parent):
@@ -146,13 +158,19 @@ class EntityBox(qt.QWidget):
         self.rdo_with_text.clicked.connect(self.with_text)
 
     def requests_get(self, _):
+        '''
+            Given URL in self.input_url.text(), blocking fetch and display content.
+        '''
+
         if not self.data:
             if not bool(URL_RE.match(self.input_url.text())):
                 self.parent.set_status_bar("The provided URL is invalid. It must starts with [ http(s):// ].")
                 return
 
             try:
-                resp = requests.get(self.input_url.text())
+                from aio import async_fetch
+                # resp = requests.get(self.input_url.text())
+                resp = async_fetch(self.input_url.text()).result()
             except BaseException as e:
                 self.parent.set_status_bar(repr(e))
                 return
@@ -171,6 +189,10 @@ class EntityBox(qt.QWidget):
                 self.parent.set_status_bar(repr(resp))
 
     def requests_extract(self, _):
+        '''
+            Extract data only after self.requests_get() is called.
+            Responsive to display options.
+        '''
         if self.status_code != 200:
             return
 
@@ -181,7 +203,7 @@ class EntityBox(qt.QWidget):
 
         try:
             if self.is_with_css:
-                repo_html, repo_text = [], []
+                repo_html = []
                 for tag in list(self.soup.find_all(class_=re.compile(self.input_filter.text()))):
                     if tag.name not in EntityBox.TAG_EXCLUDE:
                         if str(tag) not in repo_html:
@@ -237,13 +259,18 @@ class EntityBox(qt.QWidget):
         self.display.set_text(self.str_html)
 
 
+def q_btn_set_width(button: qt.QPushButton, width: int):
+    button.setMinimumWidth(width)
+    button.setMaximumWidth(width)
+
+
 # Subclass QMainWindow to customize your application's main window
 class MainWindow(qt.QMainWindow):
     def __init__(self):
         super().__init__()
 
         # window parameters
-        self.setWindowTitle(f"BeautifulSoup GUI v0.1")
+        self.setWindowTitle(f"BeautifulSoup GUI v{APP_VERSION}")
         self.setMinimumSize(QSize(840, 360))
         self.setMaximumSize(QSize(840, 1080))
 
@@ -251,7 +278,7 @@ class MainWindow(qt.QMainWindow):
         self.setStatusBar(self.statusBar)
         self.set_status_bar("Normal")
 
-        self.lst_display = list()
+        self.lst_display: list[EntityBox] = list()
 
         # self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         # self.customContextMenuRequested.connect(lambda: print("calling context menu"))
@@ -259,8 +286,10 @@ class MainWindow(qt.QMainWindow):
         # widgets init
         self.btn_add_display = qt.QPushButton("Add Display")
         self.btn_rmv_display = qt.QPushButton("Remove Display")
-        self.btn_add_display.setMaximumWidth(160)
-        self.btn_rmv_display.setMaximumWidth(160)
+        self.btn_fetch_all = qt.QPushButton("Fetch All")
+        q_btn_set_width(self.btn_add_display, 160)
+        q_btn_set_width(self.btn_rmv_display, 160)
+        q_btn_set_width(self.btn_fetch_all, 160)
 
         # 1/
         widget_main = qt.QWidget()
@@ -268,6 +297,7 @@ class MainWindow(qt.QMainWindow):
         self.layout_main_fixed_btn = qt.QHBoxLayout()
         self.layout_main_fixed_btn.addWidget(self.btn_add_display, alignment=Qt.AlignmentFlag.AlignLeft)
         self.layout_main_fixed_btn.addWidget(self.btn_rmv_display, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.layout_main_fixed_btn.addWidget(self.btn_fetch_all, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.layout_main_display = qt.QScrollArea()
         self.layout_main_display_widget = qt.QWidget()
@@ -291,16 +321,23 @@ class MainWindow(qt.QMainWindow):
         # connect
         self.btn_add_display.clicked.connect(self.add_display)
         self.btn_rmv_display.clicked.connect(self.rmv_display)
+        self.btn_fetch_all.clicked.connect(self.fetch_all)
 
         self.setCentralWidget(widget_main)
 
     def add_display(self):
+        '''
+        Add an EntityBox.
+        '''
         eb = EntityBox(self)
         self.lst_display.append(eb)
         self.layout_main_display_widget_layout.addWidget(eb)
         self.set_status_bar('Added new widget')
 
     def rmv_display(self):
+        '''
+        Remove the bottom most EntityBox.
+        '''
         if len(self.lst_display):
             eb: EntityBox = self.lst_display.pop()
             self.layout_main_display_widget_layout.removeWidget(eb)
@@ -309,20 +346,37 @@ class MainWindow(qt.QMainWindow):
         else:
             self.set_status_bar('Cannot remove widget')
 
+    def fetch_all(self):
+        '''
+        For all existing EntityBox, fetch and display content.
+        '''
+        for eb in self.lst_display:
+            eb.requests_get(None)
+
+    def save_config(self):
+        # TODO
+        raise NotImplementedError
+
+    def load_config(self):
+        # TODO
+        raise NotImplementedError
+
     def set_status_bar(self, e):
         self.statusBar.showMessage(e)
 
     def contextMenuEvent(self, e):
-        context = qt.QMenu(self)
-        context.addAction(QAction("test 1", self))
-        context.addAction(QAction("test 2", self))
-        context.addAction(QAction("test 3", self))
+        pass
+        # context = qt.QMenu(self)
+        # context.addAction(QAction("test 1", self))
+        # context.addAction(QAction("test 2", self))
+        # context.addAction(QAction("test 3", self))
         # context.hovered.connect(lambda x: print("hovered over", x.text()))
-        context.triggered.connect(lambda x: print("pressed", x.str_html()))
-        context.exec(e.globalPos())
+        # context.triggered.connect(lambda x: print("pressed", x.str_html()))
+        # context.exec(e.globalPos())
 
     def on_trigger(self, *args, **kwargs):
-        print(args, kwargs)
+        pass
+        # print(args, kwargs)
 
     def _mousePressEvent(self, e):
         pass
