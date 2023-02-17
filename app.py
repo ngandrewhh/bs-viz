@@ -4,22 +4,19 @@ import re
 
 # from PyQt6.QtGui import QAction
 import PyQt6.QtWidgets as qt
-from PyQt6.QtCore import QSize, Qt, QMargins
+from PyQt6.QtCore import QSize, Qt, QMargins, QTimer
 from bs4 import BeautifulSoup
 
-APP_VERSION = "0.1.1"
+# Global Constants
+APP_VERSION = "0.1.3"
 URL_RE = re.compile(r"(ftp|http|https):\/\/(\w+:{0,1}\w*@)?(\S+)(:[0-9]+)?(\/|\/([\w#!:.?+=&%@!\-\/]))?")
-CONTENT_MARGINS_NARROW = QMargins(2, 0, 2, 0)
+CONTENT_MARGINS_NARROW = QMargins(2, 0, 2, 0)  # Left, Top, Right, Bottom
 CONTENT_MARGINS_NORMAL = QMargins(2, 2, 2, 2)
 LOREM_IPSUM = """
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Praesent finibus tortor ut viverra pretium. Fusce ut nulla libero. Aenean mattis eget nisi non pellentesque. Aenean tempus ex eget sapien rhoncus suscipit. Fusce non lectus velit. Mauris semper nisl id sapien congue, eu mollis turpis tempor. Aenean euismod libero vitae sem dapibus convallis.
-
 Vestibulum vel laoreet turpis. Vivamus fringilla dolor nunc. Sed varius, neque vitae gravida elementum, velit ligula aliquam augue, eu auctor arcu leo et quam. Vestibulum magna nulla, hendrerit eget ipsum quis, dictum lacinia sem. Cras suscipit ex sit amet magna laoreet vestibulum. Nam tempus quis tortor ac efficitur. Nam fermentum urna vel sem rutrum, id ultrices dolor iaculis. In massa lectus, luctus sed purus eget, aliquet imperdiet purus. Sed porttitor lectus eget tincidunt lobortis.
-
 Phasellus porta quam eget justo efficitur, vitae convallis felis posuere. Nunc varius purus lobortis orci ultricies mollis. Ut sed felis a lectus sagittis varius. In rutrum sed enim nec suscipit. Donec purus lectus, convallis vel pulvinar in, hendrerit sit amet ex. Cras convallis suscipit augue, id tempus libero. Integer tempus laoreet interdum. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; Nulla finibus magna turpis, quis malesuada ligula efficitur non. Donec faucibus nec leo sed tempus. Nunc eleifend, dolor sit amet dictum dignissim, enim nibh faucibus mi, ut molestie erat odio at elit. Pellentesque eu enim leo.
-
 Donec ac posuere elit. Maecenas nec augue malesuada, aliquet est id, placerat neque. Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. Proin bibendum lorem mattis ornare consequat. Sed fermentum finibus lacinia. Curabitur vitae velit nibh. Vivamus et nisl et magna volutpat convallis et at neque. Donec mauris dolor, rhoncus sit amet urna ac, porttitor varius nibh. Proin tempus placerat leo.
-
 Ut facilisis facilisis purus non tincidunt. Cras vel sem placerat, congue mauris quis, aliquam lectus. Ut at fringilla sapien, at bibendum leo. Nulla egestas volutpat nisi hendrerit rutrum. Curabitur vel erat fermentum, sagittis nisl suscipit, fermentum nibh. Nunc ut metus ac sapien ornare tincidunt. Nullam augue magna, rhoncus ac neque eu, maximus suscipit lorem. In vel diam placerat velit maximus ullamcorper nec quis mi. Morbi viverra tellus eget ante consectetur lacinia. Vivamus tristique risus vel consequat porttitor. Phasellus malesuada in lectus at sodales. Aliquam tincidunt blandit est. Aliquam pretium dictum justo, ut luctus lacus aliquet sed. Fusce in risus arcu. Fusce id magna nec nisi condimentum aliquam nec at dui. Sed metus orci, laoreet ut ligula vitae, lobortis consectetur diam.
 """
 
@@ -139,9 +136,13 @@ class EntityBox(qt.QWidget):
         layout_l1.setColumnStretch(0, 1)
         layout_l1.setColumnStretch(1, 2)
 
+        # Spacing
+        layout_l1.setContentsMargins(CONTENT_MARGINS_NARROW)
         layout_l3_form.setContentsMargins(CONTENT_MARGINS_NARROW)
 
-        self.setMinimumSize(720, 180)
+        # Size
+        self.setMinimumSize(800, 180)
+        self.setMaximumSize(800, 360)
 
         # collect
         self.setLayout(layout_l1)
@@ -150,7 +151,6 @@ class EntityBox(qt.QWidget):
         # reaction
         self.btn_fetch.clicked.connect(self.requests_get)
         self.input_filter.textChanged.connect(self.requests_extract)
-        # self.btn_read.clicked.connect(self.requests_read)
         self.rdo_raw.clicked.connect(self.output_raw)
         self.rdo_plain.clicked.connect(self.output_plain)
         self.rdo_clean.clicked.connect(self.output_clean)
@@ -164,7 +164,7 @@ class EntityBox(qt.QWidget):
 
         if not self.data:
             if not bool(URL_RE.match(self.input_url.text())):
-                self.parent.set_status_bar("The provided URL is invalid. It must starts with [ http(s):// ].")
+                self.parent.set_status("The provided URL is invalid. It must starts with [ http(s):// ].")
                 return
 
             try:
@@ -172,7 +172,7 @@ class EntityBox(qt.QWidget):
                 # resp = requests.get(self.input_url.text())
                 resp = async_fetch(self.input_url.text()).result()
             except BaseException as e:
-                self.parent.set_status_bar(repr(e))
+                self.parent.set_status(repr(e))
                 return
 
             if resp.status_code == 200:
@@ -184,9 +184,9 @@ class EntityBox(qt.QWidget):
                 # self.btn_fetch.setText(str(resp))
                 self.input_filter.setEnabled(True)
                 self.requests_extract(_)
-                self.parent.set_status_bar("URL Fetch succeeded.")
+                self.parent.set_status("URL Fetch succeeded.")
             else:
-                self.parent.set_status_bar(repr(resp))
+                self.parent.set_status(repr(resp))
 
     def requests_extract(self, _=None):
         '''
@@ -275,12 +275,17 @@ class EntityBox(qt.QWidget):
         self.requests_get()
 
 
-def q_btn_set_width(button: qt.QPushButton, width: int):
-    button.setMinimumWidth(width)
-    button.setMaximumWidth(width)
+def qt_widget_set_size(button: qt.QWidget, width: int = None, height: int = None):
+    if width:
+        button.setMinimumWidth(width)
+        button.setMaximumWidth(width)
+
+    if height:
+        button.setMinimumHeight(width)
+        button.setMaximumHeight(width)
 
 
-# Subclass QMainWindow to customize your application's main window
+# Subclass QMainWindow to customize application's main window
 class MainWindow(qt.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -292,8 +297,9 @@ class MainWindow(qt.QMainWindow):
 
         self.statusBar = qt.QStatusBar(self)
         self.setStatusBar(self.statusBar)
-        self.set_status_bar("Normal")
+        self.set_status("Normal")
 
+        self.refresh_timer = QTimer(self)
         self.list_entity_box: list[EntityBox] = list()
 
         # self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -305,16 +311,20 @@ class MainWindow(qt.QMainWindow):
         self.btn_fetch_all = qt.QPushButton("Fetch All")
         self.btn_save_config = qt.QPushButton("Save Config")
         self.btn_load_config = qt.QPushButton("Load Config")
-        q_btn_set_width(self.btn_add_display, 140)
-        q_btn_set_width(self.btn_rmv_display, 140)
-        q_btn_set_width(self.btn_fetch_all, 140)
-        q_btn_set_width(self.btn_save_config, 140)
-        q_btn_set_width(self.btn_load_config, 140)
+        self.chk_auto_refresh = qt.QCheckBox("Auto Refresh")
+        qt_widget_set_size(self.btn_add_display, width=120)
+        qt_widget_set_size(self.btn_rmv_display, width=120)
+        qt_widget_set_size(self.btn_fetch_all  , width=120)
+        qt_widget_set_size(self.btn_save_config, width=120)
+        qt_widget_set_size(self.btn_load_config, width=120)
+        qt_widget_set_size(self.chk_auto_refresh,width=110)
 
         # 1/ Layouts
         widget_main = qt.QWidget()
         layout_main = qt.QVBoxLayout()
+
         self.layout_main_fixed_btn = qt.QHBoxLayout()
+        self.layout_main_fixed_btn.setSpacing(4)
         self.layout_main_fixed_btn_left = qt.QHBoxLayout()
         self.layout_main_fixed_btn_right = qt.QHBoxLayout()
 
@@ -332,9 +342,11 @@ class MainWindow(qt.QMainWindow):
         self.layout_main_fixed_btn_left.addWidget(self.btn_fetch_all,   alignment=Qt.AlignmentFlag.AlignLeft)
 
         # 3/ Right Buttons
+        self.layout_main_fixed_btn_right.addWidget(self.chk_auto_refresh, alignment=Qt.AlignmentFlag.AlignLeft)
         self.layout_main_fixed_btn_right.addWidget(self.btn_save_config, alignment=Qt.AlignmentFlag.AlignLeft)
         self.layout_main_fixed_btn_right.addWidget(self.btn_load_config, alignment=Qt.AlignmentFlag.AlignLeft)
 
+        # Compose Layout
         self.layout_main_display = qt.QScrollArea()
         self.layout_main_display_widget = qt.QWidget()
         self.layout_main_display_widget_layout = qt.QVBoxLayout()
@@ -353,6 +365,7 @@ class MainWindow(qt.QMainWindow):
 
         widget_main.setContentsMargins(CONTENT_MARGINS_NORMAL)
         layout_main.setContentsMargins(CONTENT_MARGINS_NORMAL)
+        layout_main.setSpacing(0)
 
         # connect
         self.btn_add_display.clicked.connect(self.add_display)
@@ -360,7 +373,7 @@ class MainWindow(qt.QMainWindow):
         self.btn_fetch_all.clicked.connect(self.fetch_all)
         self.btn_save_config.clicked.connect(self.save_config)
         self.btn_load_config.clicked.connect(self.load_config)
-
+        self.chk_auto_refresh.clicked.connect(self.set_refresh)
         self.setCentralWidget(widget_main)
 
     def add_display(self) -> EntityBox:
@@ -370,7 +383,7 @@ class MainWindow(qt.QMainWindow):
         eb = EntityBox(self)
         self.list_entity_box.append(eb)
         self.layout_main_display_widget_layout.addWidget(eb)
-        self.set_status_bar('Added new widget')
+        self.set_status('Added new widget')
         return eb
 
     def rmv_display(self):
@@ -380,10 +393,10 @@ class MainWindow(qt.QMainWindow):
         if len(self.list_entity_box):
             eb: EntityBox = self.list_entity_box.pop()
             self.layout_main_display_widget_layout.removeWidget(eb)
-            self.set_status_bar('Removed bottom most widget')
+            self.set_status('Removed bottom most widget')
 
         else:
-            self.set_status_bar('Cannot remove widget')
+            self.set_status('Cannot remove widget')
 
     def rmv_all_display(self):
         '''
@@ -392,7 +405,7 @@ class MainWindow(qt.QMainWindow):
         num_of_eb = len(self.list_entity_box)
         for i in range(num_of_eb):
             self.rmv_display()
-        self.set_status_bar('Removed all widgets')
+        self.set_status('Removed all widgets')
 
     def fetch_all(self):
         '''
@@ -412,7 +425,23 @@ class MainWindow(qt.QMainWindow):
         with open("./config.json", 'w+') as f:
             json.dump(global_cfg, f)
 
-        self.set_status_bar(f"Config saved to {os.getcwd()}/config.json")
+        self.set_status(f"Config saved to {os.getcwd()}/config.json")
+
+    def set_refresh(self, check_state):
+        import time
+
+        def fetch_all_with_time():
+            self.fetch_all()
+            self.set_status(f"Auto refreshed at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
+
+        if check_state:
+            # self.refresh_timer.timeout.connect(lambda: self.set_status(f"Time is {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}"))
+            self.refresh_timer.timeout.connect(fetch_all_with_time)
+            self.refresh_timer.start(int(1000 * 60 * 5))
+
+        else:
+            self.refresh_timer.stop()
+            self.set_status(f"Auto refresh stopped.")
 
     def load_config(self):
         '''
@@ -420,6 +449,8 @@ class MainWindow(qt.QMainWindow):
         '''
         # TODO: Add a dialog to select arbitrary config
         # TODO: Can add a preload config option
+        self.rmv_all_display()
+
         try:
             with open("./config.json", 'r') as f:
                 cfg = json.load(f)
@@ -432,14 +463,14 @@ class MainWindow(qt.QMainWindow):
                         assert(all([required_key in cfg_.keys() for required_key in ['url', 'filter', 'is_with_css', 'output_option']]))
                         self.add_display().from_config(cfg_)
                     except AssertionError:
-                        self.set_status_bar("config.json may be corrupted. Try recreating proper file with Save Config.")
+                        self.set_status("config.json may be corrupted. Try recreating proper file with Save Config.")
 
         except FileNotFoundError:
-            self.set_status_bar("config.json not found in current working directory. Check if file exists.")
+            self.set_status("config.json not found in current working directory. Check if file exists.")
 
-        self.set_status_bar("Load config succeeded.")
+        self.set_status("Load config succeeded.")
 
-    def set_status_bar(self, e):
+    def set_status(self, e):
         self.statusBar.showMessage(e)
 
     def contextMenuEvent(self, e):
@@ -452,46 +483,15 @@ class MainWindow(qt.QMainWindow):
         # context.triggered.connect(lambda x: print("pressed", x.str_html()))
         # context.exec(e.globalPos())
 
-    def on_trigger(self, *args, **kwargs):
-        pass
-        # print(args, kwargs)
+    # def mousePressEvent(self, e):
+    #     if e.button() ...
+    #     pass
 
-    def _mousePressEvent(self, e):
-        pass
-        # if e.button() == Qt.MouseButton.LeftButton:
-        #     # handle the left-button press in here
-        #     self.display.set_text("mousePressEvent LEFT")
-        #
-        # elif e.button() == Qt.MouseButton.MiddleButton:
-        #     # handle the middle-button press in here.
-        #     self.display.set_text("mousePressEvent MIDDLE")
-        #
-        # elif e.button() == Qt.MouseButton.RightButton:
-        #     # handle the right-button press in here.
-        #     self.display.set_text("mousePressEvent RIGHT")
+    # def mouseReleaseEvent(self, e):
+    #     pass
 
-    def _mouseReleaseEvent(self, e):
-        pass
-        # if e.button() == Qt.MouseButton.LeftButton:
-        #     self.display.set_text("mouseReleaseEvent LEFT")
-        #
-        # elif e.button() == Qt.MouseButton.MiddleButton:
-        #     self.display.set_text("mouseReleaseEvent MIDDLE")
-        #
-        # elif e.button() == Qt.MouseButton.RightButton:
-        #     self.display.set_text("mouseReleaseEvent RIGHT")
-
-    def _mouseDoubleClickEvent(self, e):
-        pass
-        # if e.button() == Qt.MouseButton.LeftButton:
-        #     self.display.set_text("mouseDoubleClickEvent LEFT")
-        #
-        # elif e.button() == Qt.MouseButton.MiddleButton:
-        #     self.display.set_text("mouseDoubleClickEvent MIDDLE")
-        #
-        # elif e.button() == Qt.MouseButton.RightButton:
-        #     self.display.set_text("mouseDoubleClickEvent RIGHT")
-
+    # def mouseDoubleClickEvent(self, e):
+    #     pass
 
 def main():
     app = qt.QApplication([])
