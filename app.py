@@ -2,14 +2,17 @@ import os
 import json
 import re
 
+import pandas as pd
+import numpy as np
+
 # from PyQt6.QtGui import QAction
 import PyQt6.QtWidgets as qt
 from PyQt6.QtCore import QSize, Qt, QMargins, QTimer
 from bs4 import BeautifulSoup
 
 # Global Constants
-APP_VERSION = "0.1.3"
-URL_RE = re.compile(r"(ftp|http|https):\/\/(\w+:{0,1}\w*@)?(\S+)(:[0-9]+)?(\/|\/([\w#!:.?+=&%@!\-\/]))?")
+APP_VERSION = "0.1.5"
+URL_RE = re.compile(r"(ftp|http|https)://(\w+:?\w*@)?(\S+)(:\d+)?(/|/([\w#!:.?+=&%@!-/]))?")
 CONTENT_MARGINS_NARROW = QMargins(2, 0, 2, 0)  # Left, Top, Right, Bottom
 CONTENT_MARGINS_NORMAL = QMargins(2, 2, 2, 2)
 LOREM_IPSUM = """
@@ -21,44 +24,22 @@ Ut facilisis facilisis purus non tincidunt. Cras vel sem placerat, congue mauris
 """
 
 
-class ScrollDisplay(qt.QScrollArea):
-    '''
-        Scrollable Website Content Display.
-    '''
-    # constructor
-    def __init__(self):
-        super().__init__()
-        self.output_option = 0
+def qt_widget_set_size(button: qt.QWidget, width: int = None, height: int = None):
+    if width:
+        button.setMinimumWidth(width)
+        button.setMaximumWidth(width)
 
-        # making widget resizable
-        self.setWidgetResizable(True)
-        self.setSizePolicy(qt.QSizePolicy.Policy.Expanding, qt.QSizePolicy.Policy.Expanding)
-
-        # creating text field
-        self.label = qt.QTextEdit(self)
-        self.label.setLineWrapMode(self.label.LineWrapMode.NoWrap)
-        self.label.setReadOnly(True)
-        self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self.label.setSizePolicy(qt.QSizePolicy.Policy.Expanding, qt.QSizePolicy.Policy.Expanding)
-
-        self.setWidget(self.label)
-
-    def set_text(self, text: str):
-        if self.output_option == 0:
-            self.label.setText(text)
-        elif self.output_option == 1:
-            self.label.setPlainText(text)
-        elif self.output_option == 2:
-            plain_soup = BeautifulSoup(text, 'lxml')
-            self.label.setPlainText(re.sub('[\n| ]+', '\n', plain_soup.text))
+    if height:
+        button.setMinimumHeight(width)
+        button.setMaximumHeight(width)
 
 
 class FormRadioButtons:
-    '''
+    """
         Form Radio Button Line Factory Class.
         Use new() method and pass in a list of button names.
         Return the groupbox and a list of created buttons.
-    '''
+    """
     def new(*button_names: str) -> (qt.QGroupBox, list[qt.QRadioButton]):
         rdo_gbox = qt.QGroupBox()
         rdo_hbox = qt.QHBoxLayout()
@@ -79,9 +60,12 @@ class FormRadioButtons:
 
 
 class EntityBox(qt.QWidget):
-    '''
+    """
     EntityBox is a self-containing widget for scraping one URL.
-    '''
+    """
+
+    # These tags are unlikely to contain useful information, or contain an array of nested information.
+    # Therefore, they are excluded during the tag parsing stage.
     TAG_EXCLUDE = ['script', 'meta', 'head', 'noscript', 'svg', 'html', 'body', 'div', 'aside', 'main']
 
     def __init__(self, parent):
@@ -92,25 +76,27 @@ class EntityBox(qt.QWidget):
 
         # data
         self.status_code = -1
-        self.data = None
-        self.soup = None
-        self.str_html = LOREM_IPSUM
-        self.str_text = LOREM_IPSUM
+        self.resp_raw = None
+        self.resp_soup = None
+        self.resp_html_full = None
+        self.resp_html = None
         self.is_with_css = True
 
         # widgets
         self.display = ScrollDisplay()
         self.input_url = qt.QLineEdit()
         self.input_filter = qt.QLineEdit()
+        self.input_transform = qt.QPlainTextEdit()
 
         self.rdo_gbox_with, self.rdo_with_css, self.rdo_with_text = FormRadioButtons.new("CSS", "Text")
-        self.rdo_gbox_disp, self.rdo_raw, self.rdo_plain, self.rdo_clean = FormRadioButtons.new("HTML", "Raw", "Clean")
+        self.rdo_gbox_disp, self.rdo_html, self.rdo_clean, self.rdo_raw = FormRadioButtons.new("HTML", "Clean", "Raw")
 
         self.btn_fetch = qt.QPushButton("Fetch")
-        self.btn_read = qt.QPushButton("Freeze")
+        self.btn_transform = qt.QPushButton("Transform")
 
-        self.btn_read.setCheckable(True)
+        self.btn_transform.setCheckable(True)
         self.input_filter.setEnabled(False)
+        self.input_transform.setTabChangesFocus(True)
 
         # layout
         layout_l1 = qt.QGridLayout()
@@ -124,17 +110,18 @@ class EntityBox(qt.QWidget):
         layout_l3_form.addRow("Filter", self.input_filter)
         layout_l3_form.addRow("With", self.rdo_gbox_with)
         layout_l3_form.addRow("Display", self.rdo_gbox_disp)
+        layout_l3_form.addRow("Transform", self.input_transform)
 
         # Form Button
         layout_l3_btn.addWidget(self.btn_fetch)
-        layout_l3_btn.addWidget(self.btn_read)
+        layout_l3_btn.addWidget(self.btn_transform)
 
         layout_l2_left.addLayout(layout_l3_form)
         layout_l2_left.addLayout(layout_l3_btn)
         layout_l1.addLayout(layout_l2_left, 0, 0)
         layout_l1.addWidget(self.display, 0, 1)
         layout_l1.setColumnStretch(0, 1)
-        layout_l1.setColumnStretch(1, 2)
+        layout_l1.setColumnStretch(1, 5)
 
         # Spacing
         layout_l1.setContentsMargins(CONTENT_MARGINS_NARROW)
@@ -144,119 +131,173 @@ class EntityBox(qt.QWidget):
         self.setMinimumSize(800, 180)
         self.setMaximumSize(800, 360)
 
-        # collect
+        # Collect remaining parts
+        self.form = layout_l3_form
         self.setLayout(layout_l1)
         self.input_url.setText("https://")
+        self.form.setRowVisible(4, False)
 
-        # reaction
+        # Set reactions
         self.btn_fetch.clicked.connect(self.requests_get)
-        self.input_filter.textChanged.connect(self.requests_extract)
-        self.rdo_raw.clicked.connect(self.output_raw)
-        self.rdo_plain.clicked.connect(self.output_plain)
+        self.btn_transform.clicked.connect(self.enable_transform)
+        self.input_filter.textChanged.connect(self.send_to_display)
+        self.rdo_html.clicked.connect(self.output_html)
         self.rdo_clean.clicked.connect(self.output_clean)
+        self.rdo_raw.clicked.connect(self.output_raw)
         self.rdo_with_css.clicked.connect(self.with_css)
         self.rdo_with_text.clicked.connect(self.with_text)
 
     def requests_get(self, _=None):
-        '''
+        """
             Given URL in self.input_url.text(), blocking fetch and display content.
-        '''
+        """
 
-        if not self.data:
-            if not bool(URL_RE.match(self.input_url.text())):
-                self.parent.set_status("The provided URL is invalid. It must starts with [ http(s):// ].")
-                return
+        if not bool(URL_RE.match(self.input_url.text())):
+            self.parent.set_status("The provided URL is invalid. It must starts with [ http(s):// ].")
+            return
 
-            try:
-                from aio import async_fetch
-                # resp = requests.get(self.input_url.text())
-                resp = async_fetch(self.input_url.text()).result()
-            except BaseException as e:
-                self.parent.set_status(repr(e))
-                return
+        try:
+            from aio import async_fetch
+            # resp = requests.get(self.input_url.text())
+            resp = async_fetch(self.input_url.text()).result()
+        except BaseException as e:
+            self.parent.set_status(repr(e))
+            return
 
-            if resp.status_code == 200:
-                self.status_code = resp.status_code
-                self.data = resp.text
-                self.soup = BeautifulSoup(self.data, 'lxml')
-                self.str_html = self.soup.prettify()
-                self.btn_fetch.setEnabled(False)
-                # self.btn_fetch.setText(str(resp))
-                self.input_filter.setEnabled(True)
-                self.requests_extract(_)
-                self.parent.set_status("URL Fetch succeeded.")
-            else:
-                self.parent.set_status(repr(resp))
+        if resp.status_code == 200:
+            self.status_code = resp.status_code
+
+            # Parse response
+            self.resp_raw = resp.text
+            self.resp_soup = BeautifulSoup(self.resp_raw, 'lxml')
+            self.resp_html_full = self.resp_soup.prettify()
+
+            # Post process
+            self.btn_fetch.setText("Re-fetch")
+            self.input_filter.setEnabled(True)
+            self.send_to_display()
+            self.parent.set_status("URL Fetch succeeded.")
+
+        else:
+            self.parent.set_status(repr(resp))
 
     def requests_extract(self, _=None):
-        '''
+        """
             Extract data only after self.requests_get() is called.
             Responsive to display options.
-        '''
+
+            Note that CSS option used RegEx, therefore any filter with non-alphanumeric character must be escaped.
+
+            e.g. ``List(n)`` must be entered as ``List\(n\)``.
+        """
         if self.status_code != 200:
             return
 
         if not len(self.input_filter.text()):
-            self.str_html = self.soup.prettify()
-            self.display.set_text(self.str_html)
+            self.resp_html = self.resp_html_full
             return
 
         try:
             if self.is_with_css:
                 repo_html = []
-                for tag in list(self.soup.find_all(class_=re.compile(self.input_filter.text()))):
+                for tag in list(self.resp_soup.find_all(class_=re.compile(self.input_filter.text()))):
                     if tag.name not in EntityBox.TAG_EXCLUDE:
                         if str(tag) not in repo_html:
                             repo_html.append(str(tag))
-                self.str_html = '<br>\n'.join(repo_html)
+                resp_html_sub = '<br>\n'.join(repo_html)
 
             else:
                 repo_html = []
-                for tag in list(self.soup.find_all()):
+                for tag in list(self.resp_soup.find_all()):
                     if (tag.name not in EntityBox.TAG_EXCLUDE) and (self.input_filter.text() in tag.text):
                         if str(tag) not in repo_html:
                             repo_html.append(str(tag))
-                self.str_html = '<br>\n'.join(repo_html)
+                resp_html_sub = '<br>\n'.join(repo_html)
 
         except BaseException as e:
-            self.str_html = repr(e)
+            resp_html_sub = repr(e)
 
-        self.display.set_text(self.str_html)
+        self.resp_html = resp_html_sub
 
-    def output_raw(self, _=None):
+    def send_to_display(self):
+        if self.status_code != 200:
+            return
+
+        self.requests_extract()
+        self.display.set_text(self.resp_html, self.resp_raw)
+
+    def output_html(self, _=None):
         self.display.output_option = 0
-        if self.status_code != 200:
-            return
-
-        self.display.set_text(self.str_html)
-
-    def output_plain(self, _=None):
-        self.display.output_option = 1
-        if self.status_code != 200:
-            return
-
-        self.display.set_text(self.str_html)
+        self.send_to_display()
 
     def output_clean(self, _=None):
-        self.display.output_option = 2
-        if self.status_code != 200:
-            return
+        self.display.output_option = 1
+        self.send_to_display()
 
-        self.display.set_text(self.str_html)
+    def output_raw(self, _=None):
+        self.display.output_option = 2
+        self.send_to_display()
 
     def with_css(self, _=None):
         self.is_with_css = True
-        if self.status_code != 200:
-            return
-
-        self.display.set_text(self.str_html)
+        self.send_to_display()
 
     def with_text(self, _=None):
         self.is_with_css = False
-        if self.status_code != 200:
-            return
+        self.send_to_display()
 
-        self.display.set_text(self.str_html)
+    def enable_transform(self, enable=False):
+        if enable:
+            self.form.setRowVisible(4, True)
+            self.input_transform.textChanged.connect(self.transform)
+        else:
+            self.form.setRowVisible(4, False)
+            self.input_transform.textChanged.disconnect()
+
+    def transform(self):
+        """
+        Advanced function !!
+
+        Transforms the output on the display to a new form with a Python function.
+
+        Example
+        ----------------------------------
+        url=https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=en
+
+        .. code-block:: python
+        def f(x):
+            tmp = pd.DataFrame(json.loads(x)['weatherForecast']).set_index('forecastDate')
+            cols = ['forecastMaxtemp', 'forecastMintemp', 'forecastMaxrh', 'forecastMinrh']
+
+            for col in cols:
+                tmp[col] = tmp[col].apply(lambda x: float(x['value']))
+
+            return tmp[cols]
+
+        """
+
+        # TODO: Add transformation as charts, also add ability to dynamically import
+        # TODO: Make pressing Tab work as an indent option
+        x: str = self.display.label.document().toPlainText()
+        fn: str = self.input_transform.document().toPlainText()
+
+        try:
+            fn = fn.strip()
+            if not fn.startswith('def') or 'return' not in fn:
+                self.parent.set_status('Transformation must be a Python function starting with '
+                                       'def f(x): and returns a value, input is malformed')
+
+            # Extract parameters from function, mangle function name and call from local
+            # fn_sig_ori = fn[fn.index(" ")+1:fn.index("(")]
+            fn_sig_new = f'_F{id(self)}'
+            fn_args = fn[fn.index("(")+1:fn.index(")")]
+            fn_body = fn[fn.index('\n')+1:]
+            fn_reconstructed = f"def {fn_sig_new}({fn_args}):\n{fn_body}"
+            exec(fn_reconstructed)
+            print(locals()[fn_sig_new](x))
+
+        except Exception as e:
+            print(repr(e))
 
     def to_config(self) -> dict:
         cfg = dict(
@@ -272,21 +313,61 @@ class EntityBox(qt.QWidget):
         self.input_filter.setText(cfg['filter'])
         self.is_with_css = cfg['is_with_css']
         self.display.output_option = cfg['output_option']
+
+        if self.is_with_css:
+            self.rdo_with_css.setChecked(True)
+        else:
+            self.rdo_with_text.setChecked(True)
+
+        if self.display.output_option == 0:
+            self.rdo_html.setChecked(True)
+        elif self.display.output_option == 1:
+            self.rdo_clean.setChecked(True)
+        elif self.display.output_option == 2:
+            self.rdo_raw.setChecked(True)
+
         self.requests_get()
 
 
-def qt_widget_set_size(button: qt.QWidget, width: int = None, height: int = None):
-    if width:
-        button.setMinimumWidth(width)
-        button.setMaximumWidth(width)
+class ScrollDisplay(qt.QScrollArea):
+    """
+        Scrollable Website Content Display.
+    """
+    # constructor
+    def __init__(self):
+        super().__init__()
+        self.output_option = 0
 
-    if height:
-        button.setMinimumHeight(width)
-        button.setMaximumHeight(width)
+        # making widget resizable
+        self.setWidgetResizable(True)
+        self.setSizePolicy(qt.QSizePolicy.Policy.Expanding, qt.QSizePolicy.Policy.Expanding)
+
+        # creating text field
+        self.label = qt.QTextEdit(self)
+        self.label.setLineWrapMode(self.label.LineWrapMode.NoWrap)
+        self.label.setReadOnly(True)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.label.setSizePolicy(qt.QSizePolicy.Policy.Expanding, qt.QSizePolicy.Policy.Expanding)
+
+        self.setWidget(self.label)
+
+    def set_text(self, html, raw):
+        if self.output_option == 0:
+            self.label.setText(html)
+
+        elif self.output_option == 1:
+            plain_soup = BeautifulSoup(html, 'lxml')
+            self.label.setPlainText(re.sub('[\n| ]+', '\n', plain_soup.text))
+
+        elif self.output_option == 2:
+            # TODO: Not output entire raw script
+            self.label.setPlainText(html)
 
 
-# Subclass QMainWindow to customize application's main window
 class MainWindow(qt.QMainWindow):
+    '''
+        Custom QMainWindow holding all widgets.
+    '''
     def __init__(self):
         super().__init__()
 
@@ -297,7 +378,6 @@ class MainWindow(qt.QMainWindow):
 
         self.statusBar = qt.QStatusBar(self)
         self.setStatusBar(self.statusBar)
-        self.set_status("Normal")
 
         self.refresh_timer = QTimer(self)
         self.list_entity_box: list[EntityBox] = list()
@@ -314,10 +394,10 @@ class MainWindow(qt.QMainWindow):
         self.chk_auto_refresh = qt.QCheckBox("Auto Refresh")
         qt_widget_set_size(self.btn_add_display, width=120)
         qt_widget_set_size(self.btn_rmv_display, width=120)
-        qt_widget_set_size(self.btn_fetch_all  , width=120)
+        qt_widget_set_size(self.btn_fetch_all, width=120)
         qt_widget_set_size(self.btn_save_config, width=120)
         qt_widget_set_size(self.btn_load_config, width=120)
-        qt_widget_set_size(self.chk_auto_refresh,width=110)
+        qt_widget_set_size(self.chk_auto_refresh, width=110)
 
         # 1/ Layouts
         widget_main = qt.QWidget()
@@ -376,10 +456,15 @@ class MainWindow(qt.QMainWindow):
         self.chk_auto_refresh.clicked.connect(self.set_refresh)
         self.setCentralWidget(widget_main)
 
+        # late init
+        self.add_display()
+        self.resize(QSize(840, 360))
+        self.set_status("Initialization completed.")
+
     def add_display(self) -> EntityBox:
-        '''
+        """
         Add an EntityBox.
-        '''
+        """
         eb = EntityBox(self)
         self.list_entity_box.append(eb)
         self.layout_main_display_widget_layout.addWidget(eb)
@@ -387,9 +472,9 @@ class MainWindow(qt.QMainWindow):
         return eb
 
     def rmv_display(self):
-        '''
+        """
         Remove the bottom most EntityBox.
-        '''
+        """
         if len(self.list_entity_box):
             eb: EntityBox = self.list_entity_box.pop()
             self.layout_main_display_widget_layout.removeWidget(eb)
@@ -399,25 +484,25 @@ class MainWindow(qt.QMainWindow):
             self.set_status('Cannot remove widget')
 
     def rmv_all_display(self):
-        '''
+        """
         Remove all EntityBox.
-        '''
+        """
         num_of_eb = len(self.list_entity_box)
         for i in range(num_of_eb):
             self.rmv_display()
         self.set_status('Removed all widgets')
 
     def fetch_all(self):
-        '''
+        """
         For all existing EntityBox, fetch and display content.
-        '''
+        """
         for eb in self.list_entity_box:
-            eb.requests_get(None)
+            eb.requests_get()
 
     def save_config(self):
-        '''
+        """
         For all existing EntityBox, fetch and save their config.
-        '''
+        """
         global_cfg = {}
         for idx, eb in enumerate(self.list_entity_box):
             global_cfg[idx] = eb.to_config()
@@ -435,7 +520,6 @@ class MainWindow(qt.QMainWindow):
             self.set_status(f"Auto refreshed at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
 
         if check_state:
-            # self.refresh_timer.timeout.connect(lambda: self.set_status(f"Time is {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}"))
             self.refresh_timer.timeout.connect(fetch_all_with_time)
             self.refresh_timer.start(int(1000 * 60 * 5))
 
@@ -444,9 +528,9 @@ class MainWindow(qt.QMainWindow):
             self.set_status(f"Auto refresh stopped.")
 
     def load_config(self):
-        '''
-        Clear all existing EB, load entirely new list of EntityBox from config.
-        '''
+        """
+            Clear all existing EB, load entirely new list of EntityBox from config.
+        """
         # TODO: Add a dialog to select arbitrary config
         # TODO: Can add a preload config option
         self.rmv_all_display()
@@ -477,8 +561,6 @@ class MainWindow(qt.QMainWindow):
         pass
         # context = qt.QMenu(self)
         # context.addAction(QAction("test 1", self))
-        # context.addAction(QAction("test 2", self))
-        # context.addAction(QAction("test 3", self))
         # context.hovered.connect(lambda x: print("hovered over", x.text()))
         # context.triggered.connect(lambda x: print("pressed", x.str_html()))
         # context.exec(e.globalPos())
@@ -492,6 +574,7 @@ class MainWindow(qt.QMainWindow):
 
     # def mouseDoubleClickEvent(self, e):
     #     pass
+
 
 def main():
     app = qt.QApplication([])
