@@ -6,12 +6,13 @@ import pandas as pd
 import numpy as np
 
 # from PyQt6.QtGui import QAction
-import PyQt6.QtWidgets as qt
+from PyQt6 import QtWidgets as qt
+from PyQt6 import QtGui
 from PyQt6.QtCore import QSize, Qt, QMargins, QTimer
 from bs4 import BeautifulSoup
 
 # Global Constants
-APP_VERSION = "0.1.5"
+APP_VERSION = "0.1.6"
 URL_RE = re.compile(r"(ftp|http|https)://(\w+:?\w*@)?(\S+)(:\d+)?(/|/([\w#!:.?+=&%@!-/]))?")
 CONTENT_MARGINS_NARROW = QMargins(2, 0, 2, 0)  # Left, Top, Right, Bottom
 CONTENT_MARGINS_NORMAL = QMargins(2, 2, 2, 2)
@@ -59,6 +60,22 @@ class FormRadioButtons:
         return rdo_gbox, *lst_btn
 
 
+class PythonBox(qt.QPlainTextEdit):
+    '''
+        Custom QPlainTextEdit with [Tab] key behavior override for ease of python coding.
+    '''
+    def __init__(self):
+        super().__init__()
+        self.setTabStopDistance(20)
+        self.setLineWrapMode(self.LineWrapMode.NoWrap)
+
+    def keyPressEvent(self, e: QtGui.QKeyEvent) -> None:
+        if e.key() == Qt.Key.Key_Tab:
+            self.insertPlainText('\t')
+        else:
+            super().keyPressEvent(e)
+
+
 class EntityBox(qt.QWidget):
     """
     EntityBox is a self-containing widget for scraping one URL.
@@ -81,12 +98,13 @@ class EntityBox(qt.QWidget):
         self.resp_html_full = None
         self.resp_html = None
         self.is_with_css = True
+        self.func_transform = None
 
         # widgets
         self.display = ScrollDisplay()
         self.input_url = qt.QLineEdit()
         self.input_filter = qt.QLineEdit()
-        self.input_transform = qt.QPlainTextEdit()
+        self.input_transform = PythonBox()
 
         self.rdo_gbox_with, self.rdo_with_css, self.rdo_with_text = FormRadioButtons.new("CSS", "Text")
         self.rdo_gbox_disp, self.rdo_html, self.rdo_clean, self.rdo_raw = FormRadioButtons.new("HTML", "Clean", "Raw")
@@ -96,7 +114,6 @@ class EntityBox(qt.QWidget):
 
         self.btn_transform.setCheckable(True)
         self.input_filter.setEnabled(False)
-        self.input_transform.setTabChangesFocus(True)
 
         # layout
         layout_l1 = qt.QGridLayout()
@@ -153,7 +170,7 @@ class EntityBox(qt.QWidget):
         """
 
         if not bool(URL_RE.match(self.input_url.text())):
-            self.parent.set_status("The provided URL is invalid. It must starts with [ http(s):// ].")
+            self.set_status("The provided URL is invalid. It must starts with [ http(s):// ].")
             return
 
         try:
@@ -161,7 +178,7 @@ class EntityBox(qt.QWidget):
             # resp = requests.get(self.input_url.text())
             resp = async_fetch(self.input_url.text()).result()
         except BaseException as e:
-            self.parent.set_status(repr(e))
+            self.set_status(repr(e))
             return
 
         if resp.status_code == 200:
@@ -176,10 +193,10 @@ class EntityBox(qt.QWidget):
             self.btn_fetch.setText("Re-fetch")
             self.input_filter.setEnabled(True)
             self.send_to_display()
-            self.parent.set_status("URL Fetch succeeded.")
+            self.set_status("URL Fetch succeeded.")
 
         else:
-            self.parent.set_status(repr(resp))
+            self.set_status(repr(resp))
 
     def requests_extract(self, _=None):
         """
@@ -224,7 +241,7 @@ class EntityBox(qt.QWidget):
             return
 
         self.requests_extract()
-        self.display.set_text(self.resp_html, self.resp_raw)
+        self.display.set_text(self.resp_html)
 
     def output_html(self, _=None):
         self.display.output_option = 0
@@ -246,19 +263,38 @@ class EntityBox(qt.QWidget):
         self.is_with_css = False
         self.send_to_display()
 
+    def set_status(self, msg):
+        self.parent.set_status(msg)
+
     def enable_transform(self, enable=False):
         if enable:
             self.form.setRowVisible(4, True)
-            self.input_transform.textChanged.connect(self.transform)
+            self.input_transform.textChanged.connect(self.get_from_input_and_set_transform)
+            self.get_from_input_and_set_transform()
+            self.set_status('Transform enabled.')
+
         else:
             self.form.setRowVisible(4, False)
             self.input_transform.textChanged.disconnect()
+            self.unset_display_transform()
+            self.set_status('Transform disabled.')
 
-    def transform(self):
+    def unset_display_transform(self):
+        self.func_transform = None
+        self.display.set_transform(None)
+
+    def set_display_transform(self):
+        self.set_status('Transform set and ready.')
+        self.display.set_transform(self.func_transform)
+
+    def get_from_input_and_set_transform(self):
         """
         Advanced function !!
 
         Transforms the output on the display to a new form with a Python function.
+
+        Suggest to be paired with HTML display mode given WYSIWYG, otherwise for non-HTML data,
+        some tags maybe added to the raw data given the soup conversion.
 
         Example
         ----------------------------------
@@ -277,14 +313,13 @@ class EntityBox(qt.QWidget):
         """
 
         # TODO: Add transformation as charts, also add ability to dynamically import
-        # TODO: Make pressing Tab work as an indent option
-        x: str = self.display.label.document().toPlainText()
+        # x: str = self.display.label.document().toPlainText()
         fn: str = self.input_transform.document().toPlainText()
 
         try:
             fn = fn.strip()
             if not fn.startswith('def') or 'return' not in fn:
-                self.parent.set_status('Transformation must be a Python function starting with '
+                self.set_status('Transformation must be a Python function starting with '
                                        'def f(x): and returns a value, input is malformed')
 
             # Extract parameters from function, mangle function name and call from local
@@ -294,10 +329,14 @@ class EntityBox(qt.QWidget):
             fn_body = fn[fn.index('\n')+1:]
             fn_reconstructed = f"def {fn_sig_new}({fn_args}):\n{fn_body}"
             exec(fn_reconstructed)
-            print(locals()[fn_sig_new](x))
+
+            self.func_transform = locals()[fn_sig_new]
+            self.set_display_transform()
+            self.send_to_display()
 
         except Exception as e:
-            print(repr(e))
+            self.set_status(f"Transform enable error: {repr(e)}")
+            self.func_transform = lambda x: x
 
     def to_config(self) -> dict:
         cfg = dict(
@@ -337,6 +376,7 @@ class ScrollDisplay(qt.QScrollArea):
     def __init__(self):
         super().__init__()
         self.output_option = 0
+        self.func_transform = None
 
         # making widget resizable
         self.setWidgetResizable(True)
@@ -351,17 +391,31 @@ class ScrollDisplay(qt.QScrollArea):
 
         self.setWidget(self.label)
 
-    def set_text(self, html, raw):
+    def set_transform(self, func=None):
+        self.func_transform = func
+
+    def set_text(self, html):
+        # Option = HTML
         if self.output_option == 0:
             self.label.setText(html)
 
+        # Option = Clean
         elif self.output_option == 1:
             plain_soup = BeautifulSoup(html, 'lxml')
-            self.label.setPlainText(re.sub('[\n| ]+', '\n', plain_soup.text))
+            body = re.sub('[\n| ]+', '\n', plain_soup.text)
+            self.label.setPlainText(body)
 
+        # Option = Raw
         elif self.output_option == 2:
-            # TODO: Not output entire raw script
             self.label.setPlainText(html)
+
+        # With Transform
+        if self.func_transform is not None:
+            try:
+                text = self.func_transform(self.label.document().toPlainText())
+                self.label.setPlainText(text)
+            except BaseException as e:
+                self.label.setPlainText(repr(e))
 
 
 class MainWindow(qt.QMainWindow):
@@ -376,8 +430,8 @@ class MainWindow(qt.QMainWindow):
         self.setMinimumSize(QSize(840, 360))
         self.setMaximumSize(QSize(840, 1080))
 
-        self.statusBar = qt.QStatusBar(self)
-        self.setStatusBar(self.statusBar)
+        self.status_bar = qt.QStatusBar(self)
+        self.setStatusBar(self.status_bar)
 
         self.refresh_timer = QTimer(self)
         self.list_entity_box: list[EntityBox] = list()
@@ -555,7 +609,7 @@ class MainWindow(qt.QMainWindow):
         self.set_status("Load config succeeded.")
 
     def set_status(self, e):
-        self.statusBar.showMessage(e)
+        self.status_bar.showMessage(e)
 
     def contextMenuEvent(self, e):
         pass
