@@ -12,7 +12,7 @@ from PyQt6.QtCore import QSize, Qt, QMargins, QTimer
 from bs4 import BeautifulSoup
 
 # Global Constants
-APP_VERSION = "0.1.6"
+APP_VERSION = "0.1.7"
 URL_RE = re.compile(r"(ftp|http|https)://(\w+:?\w*@)?(\S+)(:\d+)?(/|/([\w#!:.?+=&%@!-/]))?")
 CONTENT_MARGINS_NARROW = QMargins(2, 0, 2, 0)  # Left, Top, Right, Bottom
 CONTENT_MARGINS_NORMAL = QMargins(2, 2, 2, 2)
@@ -83,7 +83,7 @@ class EntityBox(qt.QWidget):
 
     # These tags are unlikely to contain useful information, or contain an array of nested information.
     # Therefore, they are excluded during the tag parsing stage.
-    TAG_EXCLUDE = ['script', 'meta', 'head', 'noscript', 'svg', 'html', 'body', 'div', 'aside', 'main']
+    TAG_EXCLUDE = ['script', 'meta', 'head', 'noscript', 'svg', 'html', 'aside', 'main']
 
     def __init__(self, parent):
 
@@ -99,6 +99,7 @@ class EntityBox(qt.QWidget):
         self.resp_html = None
         self.is_with_css = True
         self.func_transform = None
+        self.is_with_transform = False
 
         # widgets
         self.display = ScrollDisplay()
@@ -182,6 +183,7 @@ class EntityBox(qt.QWidget):
             return
 
         if resp.status_code == 200:
+            self.enable_transform(False)
             self.status_code = resp.status_code
 
             # Parse response
@@ -266,16 +268,21 @@ class EntityBox(qt.QWidget):
     def set_status(self, msg):
         self.parent.set_status(msg)
 
-    def enable_transform(self, enable=False):
+    def enable_transform(self, enable):
         if enable:
+            self.is_with_transform = True
             self.form.setRowVisible(4, True)
             self.input_transform.textChanged.connect(self.get_from_input_and_set_transform)
+
             self.get_from_input_and_set_transform()
             self.set_status('Transform enabled.')
 
         else:
+            self.is_with_transform = False
             self.form.setRowVisible(4, False)
-            self.input_transform.textChanged.disconnect()
+            if self.input_transform.receivers(self.input_transform.textChanged) > 0:
+                self.input_transform.textChanged.disconnect()
+
             self.unset_display_transform()
             self.set_status('Transform disabled.')
 
@@ -308,19 +315,20 @@ class EntityBox(qt.QWidget):
             for col in cols:
                 tmp[col] = tmp[col].apply(lambda x: float(x['value']))
 
-            return tmp[cols]
+            return tmp[cols].to_markdown()
 
         """
 
         # TODO: Add transformation as charts, also add ability to dynamically import
+        err_msg = 'Transformation must be a Python function starting with ' \
+                  'def f(x): and returns a value, input is malformed'
         # x: str = self.display.label.document().toPlainText()
         fn: str = self.input_transform.document().toPlainText()
 
         try:
             fn = fn.strip()
             if not fn.startswith('def') or 'return' not in fn:
-                self.set_status('Transformation must be a Python function starting with '
-                                       'def f(x): and returns a value, input is malformed')
+                self.set_status(err_msg)
 
             # Extract parameters from function, mangle function name and call from local
             # fn_sig_ori = fn[fn.index(" ")+1:fn.index("(")]
@@ -335,7 +343,7 @@ class EntityBox(qt.QWidget):
             self.send_to_display()
 
         except Exception as e:
-            self.set_status(f"Transform enable error: {repr(e)}")
+            self.set_status(err_msg)
             self.func_transform = lambda x: x
 
     def to_config(self) -> dict:
@@ -344,14 +352,18 @@ class EntityBox(qt.QWidget):
             filter=self.input_filter.text(),
             is_with_css=self.is_with_css,
             output_option=self.display.output_option,
+            is_with_transform=self.is_with_transform,
+            transform=self.input_transform.document().toPlainText() if self.func_transform is not None else ""
         )
         return cfg
 
     def from_config(self, cfg: dict):
-        self.input_url.setText(cfg['url'])
-        self.input_filter.setText(cfg['filter'])
-        self.is_with_css = cfg['is_with_css']
-        self.display.output_option = cfg['output_option']
+        self.input_url.setText(cfg.get('url', ''))
+        self.input_filter.setText(cfg.get('filter', ''))
+        self.is_with_css = cfg.get('is_with_css', True)
+        self.display.output_option = cfg.get('output_option', 0)
+        self.is_with_transform = cfg.get('is_with_transform', False)
+        self.input_transform.setPlainText(cfg.get('transform', ''))
 
         if self.is_with_css:
             self.rdo_with_css.setChecked(True)
@@ -366,6 +378,9 @@ class EntityBox(qt.QWidget):
             self.rdo_raw.setChecked(True)
 
         self.requests_get()
+        if self.is_with_transform:
+            self.btn_transform.setChecked(True)
+            self.enable_transform(True)
 
 
 class ScrollDisplay(qt.QScrollArea):
@@ -591,17 +606,17 @@ class MainWindow(qt.QMainWindow):
 
         try:
             with open("./config.json", 'r') as f:
-                cfg = json.load(f)
+                try:
+                    cfg = json.load(f)
 
-                # verify key-value pair validity
+                except Exception as e:
+                    # Could include JSONDecodeError or other IOError
+                    self.set_status("config.json may be corrupted. Try recreating proper file with Save Config.")
+
+                # Create display from config one at a time
                 for key in cfg:
                     cfg_ = cfg[key]
-
-                    try:
-                        assert(all([required_key in cfg_.keys() for required_key in ['url', 'filter', 'is_with_css', 'output_option']]))
-                        self.add_display().from_config(cfg_)
-                    except AssertionError:
-                        self.set_status("config.json may be corrupted. Try recreating proper file with Save Config.")
+                    self.add_display().from_config(cfg_)
 
         except FileNotFoundError:
             self.set_status("config.json not found in current working directory. Check if file exists.")
